@@ -1,0 +1,1342 @@
+-- ============================================================
+--  COMBAT MENU V17.1 — Delta Mobile
+--  FIX: NPC detection (qualquer pasta), distância em presets,
+--       teleporte mais estável (PivotTo)
+-- ============================================================
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService")
+local TweenService     = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local lp               = Players.LocalPlayer
+local cam              = workspace.CurrentCamera
+
+local atkOn, npcOn, godOn, voidOn, stealOn = false, false, false, false, false
+local godConn, voidKillConn = nil, nil
+local voidParts = {}
+local lastAtk, lastNpc = 0, 0
+
+-- ============================================================
+-- KILL AURA
+-- ============================================================
+local auraOn, auraPlayers, auraNPCs = false, true, true
+local auraRange, auraInterval, auraTimer = 20, 0.05, 0
+local auraRangeLabel = nil
+
+local function killAura(tc)
+    if not tc then return end
+    pcall(function()
+        local h = tc:FindFirstChildOfClass("Humanoid")
+        if h then h.Health = 0; h:TakeDamage(99999) end
+    end)
+    local char   = lp.Character
+    local tool   = char and char:FindFirstChildOfClass("Tool")
+    local handle = tool and tool:FindFirstChild("Handle")
+    if handle then
+        local orig = handle.CFrame
+        for _, nm in ipairs({"HumanoidRootPart","UpperTorso","Torso","Head"}) do
+            local p = tc:FindFirstChild(nm)
+            if p then pcall(function()
+                handle.CFrame = p.CFrame
+                firetouchinterest(handle, p, 0)
+                firetouchinterest(handle, p, 1)
+            end) end
+        end
+        pcall(function() handle.CFrame = orig end)
+        task.spawn(function()
+            for _, p in pairs(tc:GetDescendants()) do
+                if p:IsA("BasePart") then pcall(function()
+                    handle.CFrame = p.CFrame
+                    firetouchinterest(handle, p, 0)
+                    firetouchinterest(handle, p, 1)
+                end) end
+            end
+            pcall(function() handle.CFrame = orig end)
+        end)
+    end
+    if tool then
+        for _, r in pairs(tool:GetDescendants()) do
+            if r:IsA("RemoteEvent") then pcall(function() r:FireServer(tc) end) end
+        end
+    end
+end
+
+RunService.Heartbeat:Connect(function(dt)
+    if not auraOn then return end
+    auraTimer = auraTimer + dt
+    if auraTimer < auraInterval then return end
+    auraTimer = 0
+    local char = lp.Character
+    if not char then return end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+    local pChars = {}
+    for _, p in pairs(Players:GetPlayers()) do
+        if p.Character then pChars[p.Character] = true end
+    end
+    if auraPlayers then
+        for _, p in pairs(Players:GetPlayers()) do
+            if p ~= lp and p.Character then
+                local pr = p.Character:FindFirstChild("HumanoidRootPart")
+                local ph = p.Character:FindFirstChildOfClass("Humanoid")
+                if pr and ph and ph.Health > 0 then
+                    if (root.Position - pr.Position).Magnitude <= auraRange then
+                        task.spawn(function() killAura(p.Character) end)
+                    end
+                end
+            end
+        end
+    end
+    if auraNPCs then
+        for _, obj in pairs(workspace:GetDescendants()) do
+            if obj:IsA("Model") and not pChars[obj] and obj ~= char then
+                local h = obj:FindFirstChildOfClass("Humanoid")
+                local r = obj:FindFirstChild("HumanoidRootPart") or obj:FindFirstChild("Torso")
+                if h and h.Health > 0 and r then
+                    if (root.Position - r.Position).Magnitude <= auraRange then
+                        task.spawn(function() killAura(obj) end)
+                    end
+                end
+            end
+        end
+    end
+end)
+
+-- ============================================================
+-- LIMPA GUIS ANTIGAS
+-- ============================================================
+local pg = lp:WaitForChild("PlayerGui")
+for _, n in ipairs({"CM_V8","CM_V15","CM_V16","CM_V17","CM_V17.1","CM_Float","CM_Notif","CM_V17_Float","CM_V17_Notif","CM_V171_Core","CM_V171_Float_Core","CM_V171_Notif_Core"}) do
+    local o = pg:FindFirstChild(n)
+    if o then o:Destroy() end
+end
+pcall(function()
+    local h = gethui()
+    for _, n in ipairs({"CM_V16_Core","CM_Float_Core","CM_Notif_Core","CM_V17_Core","CM_V17_Float_Core","CM_V17_Notif_Core","CM_V171_Core","CM_V171_Float_Core","CM_V171_Notif_Core"}) do
+        local o = h:FindFirstChild(n)
+        if o then o:Destroy() end
+    end
+end)
+
+local function getContainer()
+    local ok, h = pcall(gethui)
+    if ok and h then return h end
+    return pg
+end
+local container = getContainer()
+
+-- ============================================================
+-- NOTIF
+-- ============================================================
+local nsg = Instance.new("ScreenGui", container)
+nsg.Name = "CM_V171_Notif_Core"
+nsg.ResetOnSpawn = false
+nsg.IgnoreGuiInset = true
+nsg.DisplayOrder = 9999
+
+local function notif(msg, dur)
+    local f = Instance.new("Frame", nsg)
+    f.Size = UDim2.new(0,255,0,42)
+    f.Position = UDim2.new(1,10,1,-52)
+    f.BackgroundColor3 = Color3.fromRGB(20,20,30)
+    f.BorderSizePixel = 0
+    Instance.new("UICorner",f).CornerRadius = UDim.new(0,8)
+    Instance.new("UIStroke",f).Color = Color3.fromRGB(180,20,20)
+    local lb = Instance.new("TextLabel",f)
+    lb.Size = UDim2.new(1,-10,1,0)
+    lb.Position = UDim2.new(0,8,0,0)
+    lb.BackgroundTransparency = 1
+    lb.Text = msg
+    lb.TextColor3 = Color3.fromRGB(225,225,235)
+    lb.Font = Enum.Font.GothamBold
+    lb.TextSize = 12
+    lb.TextXAlignment = Enum.TextXAlignment.Left
+    lb.TextWrapped = true
+    TweenService:Create(f,TweenInfo.new(0.2),{Position=UDim2.new(1,-265,1,-52)}):Play()
+    task.delay(dur or 2.5, function()
+        TweenService:Create(f,TweenInfo.new(0.2),{Position=UDim2.new(1,10,1,-52)}):Play()
+        task.delay(0.25, function() pcall(function() f:Destroy() end) end)
+    end)
+end
+
+-- ============================================================
+-- KILL ORIGINAL
+-- ============================================================
+local function kill(tc)
+    if not tc then return end
+    local char   = lp.Character
+    local tool   = char and char:FindFirstChildOfClass("Tool")
+    local handle = tool and tool:FindFirstChild("Handle")
+    if handle then
+        local orig = handle.CFrame
+        for _, nm in ipairs({"HumanoidRootPart","UpperTorso","Torso","Head"}) do
+            local p = tc:FindFirstChild(nm)
+            if p then pcall(function()
+                handle.CFrame = p.CFrame
+                firetouchinterest(handle, p, 0)
+                firetouchinterest(handle, p, 1)
+            end) end
+        end
+        pcall(function() handle.CFrame = orig end)
+        task.spawn(function()
+            local orig2 = handle.CFrame
+            for _, p in pairs(tc:GetDescendants()) do
+                if p:IsA("BasePart") then pcall(function()
+                    handle.CFrame = p.CFrame
+                    firetouchinterest(handle, p, 0)
+                    firetouchinterest(handle, p, 1)
+                end) end
+            end
+            pcall(function() handle.CFrame = orig2 end)
+        end)
+    end
+    pcall(function()
+        local h = tc:FindFirstChildOfClass("Humanoid")
+        if h then h.Health = 0; h:TakeDamage(99999) end
+    end)
+    if tool then
+        for _, r in pairs(tool:GetDescendants()) do
+            if r:IsA("RemoteEvent") then pcall(function() r:FireServer(tc) end) end
+        end
+    end
+end
+
+local function atkAll()
+    local now = tick()
+    if now - lastAtk < 0.15 then return end
+    lastAtk = now
+    local function escanear()
+        local alvos = {}
+        for _, p in pairs(Players:GetPlayers()) do
+            if p ~= lp and p.Character then table.insert(alvos, p.Character) end
+        end
+        return alvos
+    end
+    local alvos = escanear()
+    local n = #alvos
+    if n == 0 then return end
+    for _, tc in pairs(alvos) do task.spawn(function() kill(tc) end) end
+    task.delay(0.1, function()
+        for _, tc in pairs(escanear()) do task.spawn(function() kill(tc) end) end
+    end)
+    task.delay(0.25, function()
+        for _, tc in pairs(escanear()) do
+            local h = tc:FindFirstChildOfClass("Humanoid")
+            if h and h.Health > 0 then task.spawn(function() kill(tc) end) end
+        end
+    end)
+    notif("Ataque: "..n.." players", 1.2)
+end
+
+local function atkNPCs()
+    local now = tick()
+    if now - lastNpc < 0.15 then return end
+    lastNpc = now
+    local pChars = {}
+    for _, p in pairs(Players:GetPlayers()) do
+        if p.Character then pChars[p.Character] = true end
+    end
+    local myChar = lp.Character
+    local n = 0
+    for _, obj in pairs(workspace:GetDescendants()) do
+        if obj:IsA("Model") and not pChars[obj] and obj ~= myChar then
+            local h = obj:FindFirstChildOfClass("Humanoid")
+            if h and h.Health > 0 then
+                n = n + 1
+                task.spawn(function() kill(obj) end)
+            end
+        end
+    end
+    if n > 0 then notif("NPCs: "..n, 1.2) end
+end
+
+-- ============================================================
+-- TP MIRA — V17.1 (CORRIGIDO)
+-- ============================================================
+local tpMiraOn, tpNPCOn = false, false
+local markedPlr = nil
+local lastTP = 0
+local tpBall, tpBill, tpESP = nil, nil, nil
+local tpLabel, npcDistLabel = nil, nil
+
+local TPCFG = {
+    COOLDOWN  = 0.25,
+    MAX_DIST  = 80,
+    AIM_ANGLE = 35,
+    NPC_DIST  = 5,
+    TP_MIN    = 3,
+    TP_MAX    = 3.8,
+    SCAN_EVERY = 0.12,
+}
+local lastScan = 0
+
+local function getRoot(c) return c and c:FindFirstChild("HumanoidRootPart") end
+local function getHead(c) return c and c:FindFirstChild("Head") end
+
+local function angleFromView(c, pos)
+    local h = getHead(c)
+    if not h then return 180 end
+    local dot = h.CFrame.LookVector:Dot((pos - h.Position).Unit)
+    return math.deg(math.acos(math.clamp(dot, -1, 1)))
+end
+
+local function isAimingAtMe(c, myRoot)
+    if not c:FindFirstChildOfClass("Tool") then return false end
+    return angleFromView(c, myRoot.Position) <= TPCFG.AIM_ANGLE
+end
+
+local function tpUnmark()
+    if tpBall then tpBall:Destroy() tpBall = nil end
+    if tpBill then tpBill:Destroy() tpBill = nil end
+    if tpESP  then tpESP:Destroy()  tpESP = nil end
+    markedPlr = nil
+    if tpLabel then
+        tpLabel.Text = "🎯 Alvo: nenhum"
+        tpLabel.TextColor3 = Color3.fromRGB(135,135,155)
+    end
+end
+
+local function tpMark(plr, reason)
+    if not plr or plr == lp or not plr.Character then return end
+    tpUnmark()
+    markedPlr = plr
+    local c = plr.Character
+
+    tpBall = Instance.new("Part")
+    tpBall.Shape = Enum.PartType.Ball
+    tpBall.Size = Vector3.new(0.7,0.7,0.7)
+    tpBall.Material = Enum.Material.Neon
+    tpBall.Color = Color3.fromRGB(255,200,40)
+    tpBall.Anchored = true
+    tpBall.CanCollide = false; tpBall.CanQuery = false; tpBall.CanTouch = false
+    tpBall.Transparency = 0.1
+    local li = Instance.new("PointLight")
+    li.Color = Color3.fromRGB(255,200,40); li.Brightness = 2; li.Range = 7
+    li.Parent = tpBall
+    tpBall.Parent = workspace
+
+    tpESP = Instance.new("Highlight")
+    tpESP.FillColor = Color3.fromRGB(255,200,40)
+    tpESP.FillTransparency = 0.65
+    tpESP.OutlineColor = Color3.fromRGB(255,220,80)
+    tpESP.OutlineTransparency = 0
+    tpESP.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    tpESP.Adornee = c
+    tpESP.Parent = c
+
+    local head = getHead(c)
+    if head then
+        tpBill = Instance.new("BillboardGui")
+        tpBill.Size = UDim2.new(0,180,0,50)
+        tpBill.StudsOffset = Vector3.new(0,2.4,0)
+        tpBill.AlwaysOnTop = true
+        tpBill.Adornee = head
+        tpBill.Parent = head
+        local t1 = Instance.new("TextLabel",tpBill)
+        t1.Size = UDim2.new(1,0,0,22); t1.BackgroundTransparency = 1
+        t1.Text = "🎯 MARCADO"; t1.TextColor3 = Color3.fromRGB(255,200,40)
+        t1.Font = Enum.Font.GothamBold; t1.TextSize = 14
+        t1.TextStrokeTransparency = 0.4
+        local t2 = Instance.new("TextLabel",tpBill)
+        t2.Size = UDim2.new(1,0,0,18); t2.Position = UDim2.new(0,0,0,20)
+        t2.BackgroundTransparency = 1
+        t2.Text = plr.Name; t2.TextColor3 = Color3.new(1,1,1)
+        t2.Font = Enum.Font.GothamSemibold; t2.TextSize = 11
+        t2.TextStrokeTransparency = 0.5
+    end
+
+    if tpLabel then
+        tpLabel.Text = "🎯 Alvo: "..plr.Name
+        tpLabel.TextColor3 = Color3.fromRGB(255,200,40)
+    end
+    notif("🎯 Marcado: "..plr.Name.." ("..reason..")", 2)
+end
+
+-- TP V17.1: PivotTo + escolhe o lado que MAIS AUMENTA distância da ameaça
+local function doTP(threatChar, threatRoot)
+    local myChar = lp.Character
+    local myRoot = getRoot(myChar)
+    if not myChar or not myRoot then return end
+
+    local d = math.random(TPCFG.TP_MIN*100, TPCFG.TP_MAX*100)/100
+    local sideV = threatRoot.CFrame.RightVector
+
+    local posR = myRoot.Position + sideV * d
+    local posL = myRoot.Position - sideV * d
+    posR = Vector3.new(posR.X, myRoot.Position.Y, posR.Z)
+    posL = Vector3.new(posL.X, myRoot.Position.Y, posL.Z)
+
+    -- pontua cada lado: queremos FORA da visão E mais longe da ameaça
+    local myPos = myRoot.Position
+    local distNow = (myPos - threatRoot.Position).Magnitude
+
+    local distR = (posR - threatRoot.Position).Magnitude
+    local distL = (posL - threatRoot.Position).Magnitude
+    local angR  = angleFromView(threatChar, posR)
+    local angL  = angleFromView(threatChar, posL)
+
+    -- lado válido = aumenta distância. Entre os válidos, pega o de maior ângulo (fora da mira)
+    local validR = distR > distNow
+    local validL = distL > distNow
+
+    local chosen
+    if validR and validL then
+        chosen = (angR >= angL) and posR or posL
+    elseif validR then
+        chosen = posR
+    elseif validL then
+        chosen = posL
+    else
+        -- nenhum lado aumentou (ameaça colada) → recua pra trás dela
+        local back = (myPos - threatRoot.Position).Unit * (d + 1)
+        chosen = Vector3.new(myPos.X + back.X, myPos.Y, myPos.Z + back.Z)
+    end
+
+    -- fallback: ainda dentro da mira → puxa pra trás da ameaça
+    if angleFromView(threatChar, chosen) < TPCFG.AIM_ANGLE then
+        local b = chosen - threatRoot.CFrame.LookVector * 1.5
+        chosen = Vector3.new(b.X, myRoot.Position.Y, b.Z)
+    end
+
+    -- PivotTo = teleporte mais estável no mobile (não briga com animação/physics)
+    pcall(function()
+        myChar:PivotTo(CFrame.new(chosen) * (myRoot.CFrame - myRoot.CFrame.Position))
+    end)
+end
+
+RunService.Heartbeat:Connect(function()
+    if tpBall and markedPlr and markedPlr.Character then
+        local h = getHead(markedPlr.Character)
+        if h then tpBall.Position = h.Position + Vector3.new(0,1.4,0) end
+    elseif tpBall and (not markedPlr or not markedPlr.Character) then
+        tpUnmark()
+    end
+
+    if (not tpMiraOn and not tpNPCOn) then return end
+    if tick() - lastTP < TPCFG.COOLDOWN then return end
+    if tick() - lastScan < TPCFG.SCAN_EVERY then return end
+    lastScan = tick()
+
+    local myChar = lp.Character
+    local myRoot = getRoot(myChar)
+    if not myRoot then return end
+
+    -- ── ANTI-MIRA ──
+    if tpMiraOn then
+        if markedPlr and markedPlr.Character then
+            local mr = getRoot(markedPlr.Character)
+            if mr then
+                local dist = (mr.Position - myRoot.Position).Magnitude
+                if dist <= TPCFG.MAX_DIST and isAimingAtMe(markedPlr.Character, myRoot) then
+                    doTP(markedPlr.Character, mr)
+                    lastTP = tick()
+                    notif("🌀 TP! "..markedPlr.Name.." mirou em você", 1.5)
+                    return
+                end
+            end
+        end
+        local best, bestDist = nil, math.huge
+        for _, p in pairs(Players:GetPlayers()) do
+            if p ~= lp and p.Character then
+                local pr = getRoot(p.Character)
+                if pr then
+                    local dist = (pr.Position - myRoot.Position).Magnitude
+                    if dist <= TPCFG.MAX_DIST and dist < bestDist and isAimingAtMe(p.Character, myRoot) then
+                        best = p; bestDist = dist
+                    end
+                end
+            end
+        end
+        if best then
+            doTP(best.Character, getRoot(best.Character))
+            lastTP = tick()
+            notif("🌀 TP! "..best.Name.." mirou em você", 1.5)
+            return
+        end
+    end
+
+    -- ── ANTI-NPC: scan completo (GetDescendants = acha NPC em qualquer pasta) ──
+    if tpNPCOn then
+        local pChars = {}
+        for _, p in pairs(Players:GetPlayers()) do
+            if p.Character then pChars[p.Character] = true end
+        end
+        for _, obj in pairs(workspace:GetDescendants()) do
+            if obj:IsA("Model") and not pChars[obj] and obj ~= myChar then
+                local h = obj:FindFirstChildOfClass("Humanoid")
+                if h and h.Health > 0 and h.MaxHealth < 1000000 then
+                    local r = obj:FindFirstChild("HumanoidRootPart") or obj:FindFirstChild("Torso")
+                    if r and (r.Position - myRoot.Position).Magnitude <= TPCFG.NPC_DIST then
+                        doTP(obj, r)
+                        lastTP = tick()
+                        notif("🌀 TP! NPC chegou a "..TPCFG.NPC_DIST.."m", 1.2)
+                        return
+                    end
+                end
+            end
+        end
+    end
+end)
+
+local function tryMarkFromScreen(pos)
+    local ray = cam:ViewportPointToRay(pos.X, pos.Y)
+    local params = RaycastParams.new()
+    params.FilterDescendantsInstances = { lp.Character, tpBall }
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    local result = workspace:Raycast(ray.Origin, ray.Direction * 400, params)
+    if not result then return end
+    local model = result.Instance:FindFirstAncestorOfClass("Model")
+    if not model then return end
+    local plr = Players:GetPlayerFromCharacter(model)
+    if plr and plr ~= lp then tpMark(plr, "tiro") end
+end
+
+local function hookDano(char)
+    local hum = char:WaitForChild("Humanoid", 10)
+    if not hum then return end
+    hum.HealthChanged:Connect(function(nv)
+        if nv < hum.MaxHealth and nv > 0 then
+            local myRoot = getRoot(char)
+            if not myRoot then return end
+            local sus, susD = nil, math.huge
+            for _, p in pairs(Players:GetPlayers()) do
+                if p ~= lp and p.Character then
+                    local pr = getRoot(p.Character)
+                    if pr then
+                        local d = (pr.Position - myRoot.Position).Magnitude
+                        if d <= 150 and d < susD and angleFromView(p.Character, myRoot.Position) <= TPCFG.AIM_ANGLE then
+                            sus = p; susD = d
+                        end
+                    end
+                end
+            end
+            if sus then tpMark(sus, "atirou em você") end
+        end
+    end)
+end
+if lp.Character then hookDano(lp.Character) end
+lp.CharacterAdded:Connect(hookDano)
+Players.PlayerRemoving:Connect(function(p)
+    if markedPlr == p then tpUnmark() end
+end)
+
+UserInputService.TouchStarted:Connect(function(touch, gpe)
+    if gpe then return end
+    if touch.Position.X > cam.ViewportSize.X * 0.5 then
+        tryMarkFromScreen(touch.Position)
+        if atkOn then atkAll() end
+        if npcOn then atkNPCs() end
+        if stealOn then stealAll() end
+    end
+end)
+
+-- ============================================================
+-- GOD MODE
+-- ============================================================
+local GOD_HP = 1000000
+local function stopGod()
+    godOn = false
+    if godConn then pcall(function() godConn:Disconnect() end); godConn = nil end
+    pcall(function()
+        local char = lp.Character
+        if not char then return end
+        local h = char:FindFirstChildOfClass("Humanoid")
+        if h then
+            h.BreakJointsOnDeath = true
+            h:SetStateEnabled(Enum.HumanoidStateType.Dead, true)
+            h.MaxHealth = 100; h.Health = 100
+        end
+        for _, v in pairs(char:GetChildren()) do
+            if v:IsA("ForceField") then v:Destroy() end
+        end
+    end)
+end
+
+local function setupChar(char)
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+    pcall(function()
+        hum.BreakJointsOnDeath = false
+        hum.MaxHealth = GOD_HP; hum.Health = GOD_HP
+        if not char:FindFirstChildOfClass("ForceField") then
+            local ff = Instance.new("ForceField")
+            ff.Visible = false; ff.Parent = char
+        end
+    end)
+end
+
+local function startGod()
+    local char = lp.Character
+    setupChar(char)
+    godConn = RunService.Heartbeat:Connect(function()
+        if not godOn then return end
+        local c = lp.Character
+        if not c then return end
+        local hum = c:FindFirstChildOfClass("Humanoid")
+        if not hum then return end
+        pcall(function() hum.BreakJointsOnDeath = false; hum.Health = GOD_HP end)
+    end)
+    local function conectarMorte(c)
+        local hum = c:FindFirstChildOfClass("Humanoid")
+        if not hum then return end
+        hum.StateChanged:Connect(function(_, new)
+            if not godOn then return end
+            if new == Enum.HumanoidStateType.Dead then
+                task.defer(function() pcall(function()
+                    hum.Health = GOD_HP
+                    hum:ChangeState(Enum.HumanoidStateType.Running)
+                end) end)
+            end
+        end)
+    end
+    conectarMorte(char)
+    task.spawn(function()
+        while godOn do
+            task.wait(0.5)
+            if not godOn then break end
+            local myChar = lp.Character
+            local pChars = {}
+            for _, p in pairs(Players:GetPlayers()) do
+                if p.Character then pChars[p.Character] = true end
+            end
+            for _, obj in pairs(workspace:GetDescendants()) do
+                if not godOn then break end
+                if obj:IsA("Model") and not pChars[obj] and obj ~= myChar then
+                    local eh = obj:FindFirstChildOfClass("Humanoid")
+                    if eh and eh.Health > 0 and eh.MaxHealth < 500000 then
+                        task.spawn(function() kill(obj) end)
+                    end
+                end
+            end
+        end
+    end)
+    lp.CharacterAdded:Connect(function(nc)
+        if not godOn then return end
+        task.wait(0.15)
+        setupChar(nc)
+        conectarMorte(nc)
+        if godConn then godConn:Disconnect() end
+        startGod()
+    end)
+end
+
+-- ============================================================
+-- VOID ZONE
+-- ============================================================
+local VOID_SIZE = 2000
+local SAFE_RADIUS = 15
+
+local function limparVoid()
+    for _, p in pairs(voidParts) do pcall(function() p:Destroy() end) end
+    voidParts = {}
+    if voidKillConn then voidKillConn:Disconnect(); voidKillConn = nil end
+end
+
+local function criarVoid()
+    limparVoid()
+    local char = lp.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+    local centro = root.Position
+    local zonaChao = Instance.new("Part")
+    zonaChao.Name = "VoidZonaChao"
+    zonaChao.Size = Vector3.new(VOID_SIZE, 0.2, VOID_SIZE)
+    zonaChao.Position = Vector3.new(centro.X, centro.Y - 3, centro.Z)
+    zonaChao.Anchored = true; zonaChao.CanCollide = false; zonaChao.CanTouch = true
+    zonaChao.Material = Enum.Material.Neon
+    zonaChao.Color = Color3.fromRGB(200, 0, 0); zonaChao.Transparency = 0.4
+    zonaChao.Parent = workspace
+    table.insert(voidParts, zonaChao)
+    local half = VOID_SIZE / 2
+    local sR = SAFE_RADIUS
+    for _, s in pairs({
+        {sz=Vector3.new(VOID_SIZE,20,half-sR), pos=Vector3.new(centro.X,centro.Y+1,centro.Z+(half+sR)/2)},
+        {sz=Vector3.new(VOID_SIZE,20,half-sR), pos=Vector3.new(centro.X,centro.Y+1,centro.Z-(half+sR)/2)},
+        {sz=Vector3.new(half-sR,20,sR*2),      pos=Vector3.new(centro.X+(half+sR)/2,centro.Y+1,centro.Z)},
+        {sz=Vector3.new(half-sR,20,sR*2),      pos=Vector3.new(centro.X-(half+sR)/2,centro.Y+1,centro.Z)},
+    }) do
+        local p = Instance.new("Part")
+        p.Name = "VoidKill"
+        p.Size = s.sz; p.Position = s.pos
+        p.Anchored = true; p.CanCollide = false; p.CanTouch = true
+        p.Transparency = 1; p.Parent = workspace
+        table.insert(voidParts, p)
+    end
+    voidKillConn = RunService.Heartbeat:Connect(function()
+        if not voidOn then return end
+        for _, p in pairs(Players:GetPlayers()) do
+            if p ~= lp and p.Character then
+                local pr = p.Character:FindFirstChild("HumanoidRootPart")
+                if pr and (pr.Position - centro).Magnitude > SAFE_RADIUS then
+                    task.spawn(function()
+                        pcall(function() firetouchinterest(zonaChao,pr,0); firetouchinterest(zonaChao,pr,1) end)
+                        kill(p.Character)
+                    end)
+                end
+            end
+        end
+    end)
+    task.spawn(function()
+        while voidOn do
+            task.wait(0.5)
+            local c = lp.Character
+            local r = c and c:FindFirstChild("HumanoidRootPart")
+            if r then
+                local np = r.Position
+                local i = 1
+                zonaChao.Position = Vector3.new(np.X, np.Y - 3, np.Z)
+                local ns = {
+                    Vector3.new(np.X, np.Y+1, np.Z+(half+sR)/2),
+                    Vector3.new(np.X, np.Y+1, np.Z-(half+sR)/2),
+                    Vector3.new(np.X+(half+sR)/2, np.Y+1, np.Z),
+                    Vector3.new(np.X-(half+sR)/2, np.Y+1, np.Z),
+                }
+                for _, vp in pairs(voidParts) do
+                    if vp.Name == "VoidKill" then
+                        vp.Position = ns[i] or vp.Position
+                        i = i + 1
+                    end
+                end
+            end
+        end
+    end)
+    notif("☠️ Void Zone ATIVA!", 4)
+end
+
+-- ============================================================
+-- ROUBO
+-- ============================================================
+local lastSteal = 0
+local function stealFromPrompt(prompt)
+    if not prompt or not prompt.Parent then return end
+    local od = prompt.MaxActivationDistance
+    local ol = prompt.RequiresLineOfSight
+    local ht = prompt.HoldDuration
+    pcall(function() prompt.MaxActivationDistance = 9999; prompt.RequiresLineOfSight = false end)
+    task.wait(0.05)
+    pcall(function() prompt:InputHoldBegin() end)
+    task.wait(math.max(ht, 0.1) + 0.05)
+    pcall(function() prompt:InputHoldEnd() end)
+    pcall(function() fireproximityprompt(prompt) end)
+    task.wait(0.1)
+    pcall(function() prompt.MaxActivationDistance = od; prompt.RequiresLineOfSight = ol end)
+end
+local function stealAll()
+    local now = tick()
+    if now - lastSteal < 0.3 then return end
+    lastSteal = now
+    local n = 0
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= lp and p.Character then
+            n = n + 1
+            task.spawn(function()
+                for _, desc in ipairs(p.Character:GetDescendants()) do
+                    if desc:IsA("ProximityPrompt") then stealFromPrompt(desc) end
+                end
+            end)
+        end
+    end
+    if n > 0 then notif("Roubo: "..n, 1.2) end
+end
+
+-- ============================================================
+-- GUI
+-- ============================================================
+local W, H = 310, 480
+local BG  = Color3.fromRGB(14,14,20)
+local HDR = Color3.fromRGB(22,22,32)
+local RED = Color3.fromRGB(185,20,20)
+local BTN = Color3.fromRGB(40,40,56)
+local BHV = Color3.fromRGB(60,60,82)
+local GRN = Color3.fromRGB(65,205,85)
+local GRY = Color3.fromRGB(65,65,65)
+local TXT = Color3.fromRGB(225,225,235)
+local SUB = Color3.fromRGB(135,135,155)
+local CYN = Color3.fromRGB(50,200,255)
+local PRP = Color3.fromRGB(130,50,220)
+local GLD = Color3.fromRGB(255,200,40)
+
+local sg = Instance.new("ScreenGui", container)
+sg.Name = "CM_V171_Core"
+sg.ResetOnSpawn = false
+sg.IgnoreGuiInset = true
+sg.DisplayOrder = 9998
+
+local win = Instance.new("Frame", sg)
+win.Size = UDim2.new(0,W,0,H)
+win.Position = UDim2.new(0.5,-W/2,0.5,-H/2)
+win.BackgroundColor3 = BG
+win.BorderSizePixel = 0
+win.ClipsDescendants = true
+Instance.new("UICorner",win).CornerRadius = UDim.new(0,10)
+local ws2 = Instance.new("UIStroke",win)
+ws2.Color = RED; ws2.Thickness = 1.5; ws2.Transparency = 0.5
+
+local hdr = Instance.new("Frame",win)
+hdr.Size = UDim2.new(1,0,0,44)
+hdr.BackgroundColor3 = HDR; hdr.BorderSizePixel = 0
+Instance.new("UICorner",hdr).CornerRadius = UDim.new(0,10)
+local hfix = Instance.new("Frame",hdr)
+hfix.Size = UDim2.new(1,0,0,10); hfix.Position = UDim2.new(0,0,1,-10)
+hfix.BackgroundColor3 = HDR; hfix.BorderSizePixel = 0
+
+local tl = Instance.new("TextLabel",hdr)
+tl.Size = UDim2.new(1,-88,1,0); tl.Position = UDim2.new(0,12,0,0)
+tl.BackgroundTransparency = 1
+tl.Text = "Combat V17.1  ⚔️"
+tl.TextColor3 = TXT; tl.Font = Enum.Font.GothamBold; tl.TextSize = 13
+tl.TextXAlignment = Enum.TextXAlignment.Left
+
+local function hB(txt, x, col)
+    local b = Instance.new("TextButton",hdr)
+    b.Size = UDim2.new(0,30,0,30); b.Position = UDim2.new(1,x,0,7)
+    b.BackgroundColor3 = col; b.Text = txt; b.TextColor3 = Color3.new(1,1,1)
+    b.Font = Enum.Font.GothamBold; b.TextSize = 13; b.BorderSizePixel = 0
+    Instance.new("UICorner",b).CornerRadius = UDim.new(0,6)
+    return b
+end
+local closeB = hB("X", -38, Color3.fromRGB(190,30,30))
+local minB   = hB("-", -72, Color3.fromRGB(50,50,70))
+
+local dw, ds, dp = false, nil, nil
+hdr.InputBegan:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
+        dw = true; ds = i.Position; dp = win.Position
+    end
+end)
+UserInputService.InputChanged:Connect(function(i)
+    if not dw then return end
+    if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseMove then
+        local d = i.Position - ds
+        win.Position = UDim2.new(dp.X.Scale, dp.X.Offset+d.X, dp.Y.Scale, dp.Y.Offset+d.Y)
+    end
+end)
+UserInputService.InputEnded:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then dw = false end
+end)
+
+local mini = false
+minB.MouseButton1Click:Connect(function()
+    mini = not mini
+    TweenService:Create(win, TweenInfo.new(0.18, Enum.EasingStyle.Quart),
+        {Size = mini and UDim2.new(0,W,0,44) or UDim2.new(0,W,0,H)}):Play()
+    minB.Text = mini and "+" or "-"
+end)
+closeB.MouseButton1Click:Connect(function() win.Visible = false end)
+
+local tabBar = Instance.new("Frame",win)
+tabBar.Size = UDim2.new(1,0,0,32); tabBar.Position = UDim2.new(0,0,0,44)
+tabBar.BackgroundColor3 = HDR; tabBar.BorderSizePixel = 0
+Instance.new("UIListLayout",tabBar).FillDirection = Enum.FillDirection.Horizontal
+
+local tNames = {"Ataque","Aura","TP Mira","Players","God","Roubo","Void","Invis"}
+local tbBtns, pages = {}, {}
+local area = Instance.new("Frame",win)
+area.Size = UDim2.new(1,0,1,-76); area.Position = UDim2.new(0,0,0,76)
+area.BackgroundColor3 = BG; area.BorderSizePixel = 0; area.ClipsDescendants = true
+
+for i, n in ipairs(tNames) do
+    local tb = Instance.new("TextButton",tabBar)
+    tb.Size = UDim2.new(1/#tNames,0,1,0)
+    tb.BackgroundColor3 = i==1 and RED or Color3.fromRGB(30,30,44)
+    tb.Text = n; tb.TextColor3 = TXT
+    tb.Font = Enum.Font.GothamBold; tb.TextSize = 8; tb.BorderSizePixel = 0
+    tbBtns[i] = tb
+    local pf = Instance.new("ScrollingFrame",area)
+    pf.Size = UDim2.new(1,0,1,0); pf.BackgroundTransparency = 1; pf.BorderSizePixel = 0
+    pf.ScrollBarThickness = 3; pf.ScrollBarImageColor3 = RED
+    pf.CanvasSize = UDim2.new(0,0,0,0); pf.Visible = i==1
+    local lay = Instance.new("UIListLayout",pf); lay.Padding = UDim.new(0,6)
+    local pad = Instance.new("UIPadding",pf)
+    pad.PaddingLeft = UDim.new(0,8); pad.PaddingRight = UDim.new(0,8); pad.PaddingTop = UDim.new(0,8)
+    pages[i] = pf
+end
+
+local function switchTab(idx)
+    for j, t in ipairs(tbBtns) do
+        t.BackgroundColor3 = j==idx and RED or Color3.fromRGB(30,30,44)
+        pages[j].Visible = j==idx
+    end
+end
+for i, tb in ipairs(tbBtns) do
+    local idx = i
+    tb.Activated:Connect(function() switchTab(idx) end)
+    tb.MouseButton1Click:Connect(function() switchTab(idx) end)
+end
+
+local function upd(p)
+    local lay = p:FindFirstChildOfClass("UIListLayout")
+    if lay then p.CanvasSize = UDim2.new(0,0,0,lay.AbsoluteContentSize.Y+16) end
+end
+local function addToggle(p, label, cb)
+    local row = Instance.new("Frame",p)
+    row.Size = UDim2.new(1,0,0,46); row.BackgroundColor3 = BTN; row.BorderSizePixel = 0
+    Instance.new("UICorner",row).CornerRadius = UDim.new(0,8)
+    local lb = Instance.new("TextLabel",row)
+    lb.Size = UDim2.new(1,-62,1,0); lb.Position = UDim2.new(0,12,0,0)
+    lb.BackgroundTransparency = 1; lb.Text = label; lb.TextColor3 = TXT
+    lb.Font = Enum.Font.GothamBold; lb.TextSize = 13
+    lb.TextXAlignment = Enum.TextXAlignment.Left; lb.TextWrapped = true
+    local tog = Instance.new("TextButton",row)
+    tog.Size = UDim2.new(0,46,0,26); tog.Position = UDim2.new(1,-54,0.5,-13)
+    tog.BackgroundColor3 = GRY; tog.Text = ""; tog.BorderSizePixel = 0
+    Instance.new("UICorner",tog).CornerRadius = UDim.new(1,0)
+    local knob = Instance.new("Frame",tog)
+    knob.Size = UDim2.new(0,20,0,20); knob.AnchorPoint = Vector2.new(0,0.5)
+    knob.Position = UDim2.new(0,2,0.5,0)
+    knob.BackgroundColor3 = Color3.new(1,1,1); knob.BorderSizePixel = 0
+    Instance.new("UICorner",knob).CornerRadius = UDim.new(1,0)
+    local state = false
+    local function set(v)
+        state = v
+        TweenService:Create(tog,TweenInfo.new(0.18),{BackgroundColor3=v and GRN or GRY}):Play()
+        TweenService:Create(knob,TweenInfo.new(0.18),
+            {Position = v and UDim2.new(1,-22,0.5,0) or UDim2.new(0,2,0.5,0)}):Play()
+        cb(v)
+    end
+    tog.Activated:Connect(function() set(not state) end)
+    upd(p); return set
+end
+local function addButton(p, label, sub, cb)
+    local btn = Instance.new("TextButton",p)
+    btn.Size = UDim2.new(1,0,0,sub and 50 or 40)
+    btn.BackgroundColor3 = BTN; btn.Text = ""; btn.BorderSizePixel = 0
+    btn.AutoButtonColor = false
+    Instance.new("UICorner",btn).CornerRadius = UDim.new(0,8)
+    local lb = Instance.new("TextLabel",btn)
+    lb.Size = UDim2.new(1,-12,0,22); lb.Position = UDim2.new(0,12,0,sub and 5 or 9)
+    lb.BackgroundTransparency = 1; lb.Text = label; lb.TextColor3 = TXT
+    lb.Font = Enum.Font.GothamBold; lb.TextSize = 13
+    lb.TextXAlignment = Enum.TextXAlignment.Left
+    if sub then
+        local sl = Instance.new("TextLabel",btn)
+        sl.Size = UDim2.new(1,-12,0,18); sl.Position = UDim2.new(0,12,0,27)
+        sl.BackgroundTransparency = 1; sl.Text = sub; sl.TextColor3 = SUB
+        sl.Font = Enum.Font.Gotham; sl.TextSize = 11
+        sl.TextXAlignment = Enum.TextXAlignment.Left
+    end
+    btn.MouseButton1Down:Connect(function()
+        TweenService:Create(btn,TweenInfo.new(0.1),{BackgroundColor3=BHV}):Play() end)
+    btn.MouseButton1Up:Connect(function()
+        TweenService:Create(btn,TweenInfo.new(0.1),{BackgroundColor3=BTN}):Play(); cb() end)
+    btn.Activated:Connect(function() cb() end)
+    upd(p); return btn
+end
+local function addSep(p)
+    local s = Instance.new("Frame",p)
+    s.Size = UDim2.new(1,0,0,1)
+    s.BackgroundColor3 = Color3.fromRGB(40,40,55)
+    s.BorderSizePixel = 0; upd(p)
+end
+
+-- ============================================================
+-- TAB 1 — ATAQUE
+-- ============================================================
+addSep(pages[1])
+addToggle(pages[1],"Ataque Players  (toque direito)",function(v)
+    atkOn = v; notif(v and "Players ON" or "OFF", 2)
+end)
+addToggle(pages[1],"Ataque NPCs  (toque direito)",function(v)
+    npcOn = v; notif(v and "NPCs ON" or "OFF", 2)
+end)
+addSep(pages[1])
+addButton(pages[1],"MATAR TODOS AGORA","Players + NPCs",function() atkAll(); atkNPCs() end)
+upd(pages[1])
+
+-- ============================================================
+-- TAB 2 — KILL AURA
+-- ============================================================
+local pAura = pages[2]
+addSep(pAura)
+local tituloAura = Instance.new("Frame",pAura)
+tituloAura.Size = UDim2.new(1,0,0,32)
+tituloAura.BackgroundColor3 = PRP; tituloAura.BorderSizePixel = 0
+Instance.new("UICorner",tituloAura).CornerRadius = UDim.new(0,8)
+local tituloTxt = Instance.new("TextLabel",tituloAura)
+tituloTxt.Size = UDim2.new(1,0,1,0); tituloTxt.BackgroundTransparency = 1
+tituloTxt.Text = "⚔️  KILL AURA — V17.1"
+tituloTxt.TextColor3 = Color3.new(1,1,1)
+tituloTxt.Font = Enum.Font.GothamBold; tituloTxt.TextSize = 13
+upd(pAura)
+
+addToggle(pAura,"🔴 Ativar Kill Aura",function(v)
+    auraOn = v
+    notif(v and "⚔️ Kill Aura ON — "..auraRange.." studs" or "Kill Aura OFF", 2)
+end)
+addSep(pAura)
+addToggle(pAura,"💀 Atacar Players",function(v)
+    auraPlayers = v; notif(v and "Aura Players ON" or "OFF", 1.5)
+end)
+addToggle(pAura,"🤖 Atacar NPCs/Mobs",function(v)
+    auraNPCs = v; notif(v and "Aura NPCs ON" or "OFF", 1.5)
+end)
+addSep(pAura)
+
+local rangeDisplay = Instance.new("Frame",pAura)
+rangeDisplay.Size = UDim2.new(1,0,0,36)
+rangeDisplay.BackgroundColor3 = Color3.fromRGB(25,25,38); rangeDisplay.BorderSizePixel = 0
+Instance.new("UICorner",rangeDisplay).CornerRadius = UDim.new(0,8)
+local rangeLbl = Instance.new("TextLabel",rangeDisplay)
+rangeLbl.Size = UDim2.new(1,0,1,0); rangeLbl.BackgroundTransparency = 1
+rangeLbl.Text = "📏 Range: "..auraRange.." studs"
+rangeLbl.TextColor3 = CYN; rangeLbl.Font = Enum.Font.GothamBold; rangeLbl.TextSize = 13
+upd(pAura)
+auraRangeLabel = rangeLbl
+
+local function atualizarRange(novo)
+    auraRange = novo
+    rangeLbl.Text = "📏 Range: "..novo.." studs"
+    notif("Range → "..novo.." studs", 1.5)
+end
+local presetFrame = Instance.new("Frame",pAura)
+presetFrame.Size = UDim2.new(1,0,0,42); presetFrame.BackgroundTransparency = 1; presetFrame.BorderSizePixel = 0
+local pl = Instance.new("UIListLayout",presetFrame)
+pl.FillDirection = Enum.FillDirection.Horizontal; pl.Padding = UDim.new(0,5)
+upd(pAura)
+for _, v in ipairs({5, 10, 20, 50, 100, 999}) do
+    local pb = Instance.new("TextButton",presetFrame)
+    pb.Size = UDim2.new(0,40,0,38); pb.BackgroundColor3 = Color3.fromRGB(80,30,140)
+    pb.TextColor3 = Color3.new(1,1,1); pb.Text = tostring(v)
+    pb.Font = Enum.Font.GothamBold; pb.TextSize = 12; pb.BorderSizePixel = 0
+    Instance.new("UICorner",pb).CornerRadius = UDim.new(0,6)
+    pb.Activated:Connect(function()
+        atualizarRange(v)
+        TweenService:Create(pb,TweenInfo.new(0.1),{BackgroundColor3=PRP}):Play()
+        task.delay(0.3,function()
+            TweenService:Create(pb,TweenInfo.new(0.1),{BackgroundColor3=Color3.fromRGB(80,30,140)}):Play()
+        end)
+    end)
+end
+upd(pAura)
+addSep(pAura)
+addButton(pAura,"⚡ AMBOS ON","Players + NPCs juntos",function()
+    auraPlayers = true; auraNPCs = true; auraOn = true
+    notif("⚔️ Aura TOTAL ON", 2)
+end)
+addButton(pAura,"⏹ DESLIGAR AURA","",function()
+    auraOn = false; notif("Kill Aura OFF", 1.5)
+end)
+upd(pAura)
+
+-- ============================================================
+-- TAB 3 — TP MIRA (CORRIGIDA)
+-- ============================================================
+local pTP = pages[3]
+addSep(pTP)
+local tituloTP = Instance.new("Frame",pTP)
+tituloTP.Size = UDim2.new(1,0,0,32)
+tituloTP.BackgroundColor3 = GLD; tituloTP.BorderSizePixel = 0
+Instance.new("UICorner",tituloTP).CornerRadius = UDim.new(0,8)
+local tituloTPTxt = Instance.new("TextLabel",tituloTP)
+tituloTPTxt.Size = UDim2.new(1,0,1,0); tituloTPTxt.BackgroundTransparency = 1
+tituloTPTxt.Text = "🌀  TP MIRA — V17.1"
+tituloTPTxt.TextColor3 = Color3.fromRGB(20,20,20)
+tituloTPTxt.Font = Enum.Font.GothamBold; tituloTPTxt.TextSize = 13
+upd(pTP)
+
+addToggle(pTP,"🔫 Anti-Mira (players)","TP se mirarem arma em você",function(v)
+    tpMiraOn = v
+    notif(v and "🌀 Anti-Mira ON" or "Anti-Mira OFF", 2)
+end)
+addToggle(pTP,"👾 Anti-NPC","TP se NPC chegar perto",function(v)
+    tpNPCOn = v
+    notif(v and "🌀 Anti-NPC ON — "..TPCFG.NPC_DIST.."m" or "Anti-NPC OFF", 2)
+end)
+addSep(pTP)
+
+tpLabel = Instance.new("TextLabel",pTP)
+tpLabel.Size = UDim2.new(1,0,0,22)
+tpLabel.BackgroundTransparency = 1
+tpLabel.Text = "🎯 Alvo: nenhum"
+tpLabel.TextColor3 = SUB
+tpLabel.Font = Enum.Font.GothamSemibold
+tpLabel.TextSize = 12
+tpLabel.TextXAlignment = Enum.TextXAlignment.Left
+upd(pTP)
+
+local helpTP = Instance.new("TextLabel",pTP)
+helpTP.Size = UDim2.new(1,0,0,34)
+helpTP.BackgroundTransparency = 1
+helpTP.Text = "💡 Toque direito no player = marca com ESP\n💡 Marcar liga os dois modos automaticamente"
+helpTP.TextColor3 = SUB
+helpTP.Font = Enum.Font.Gotham
+helpTP.TextSize = 10
+helpTP.TextXAlignment = Enum.TextXAlignment.Left
+helpTP.TextYAlignment = Enum.TextYAlignment.Top
+helpTP.TextWrapped = true
+upd(pTP)
+
+addButton(pTP,"🎯 DESMARCAR ALVO","",function()
+    tpUnmark()
+    notif("Alvo desmarcado", 1.5)
+end)
+addSep(pTP)
+
+-- DISTÂNCIA DO NPC: presets (sem caixinha de texto)
+npcDistLabel = Instance.new("TextLabel",pTP)
+npcDistLabel.Size = UDim2.new(1,0,0,22)
+npcDistLabel.BackgroundTransparency = 1
+npcDistLabel.Text = "👾 NPC dispara a: "..TPCFG.NPC_DIST.."m"
+npcDistLabel.TextColor3 = CYN
+npcDistLabel.Font = Enum.Font.GothamBold
+npcDistLabel.TextSize = 12
+npcDistLabel.TextXAlignment = Enum.TextXAlignment.Left
+upd(pTP)
+
+local distFrame = Instance.new("Frame",pTP)
+distFrame.Size = UDim2.new(1,0,0,42)
+distFrame.BackgroundTransparency = 1; distFrame.BorderSizePixel = 0
+local dl = Instance.new("UIListLayout",distFrame)
+dl.FillDirection = Enum.FillDirection.Horizontal; dl.Padding = UDim.new(0,5)
+upd(pTP)
+
+for _, v in ipairs({2, 3, 5, 8, 12, 20}) do
+    local db = Instance.new("TextButton",distFrame)
+    db.Size = UDim2.new(0,40,0,38)
+    db.BackgroundColor3 = Color3.fromRGB(160,115,25)
+    db.TextColor3 = Color3.new(1,1,1)
+    db.Text = v.."m"
+    db.Font = Enum.Font.GothamBold; db.TextSize = 12; db.BorderSizePixel = 0
+    Instance.new("UICorner",db).CornerRadius = UDim.new(0,6)
+    db.Activated:Connect(function()
+        TPCFG.NPC_DIST = v
+        npcDistLabel.Text = "👾 NPC dispara a: "..v.."m"
+        notif("Dist. NPC → "..v.."m", 1.5)
+        TweenService:Create(db,TweenInfo.new(0.1),{BackgroundColor3=GLD}):Play()
+        task.delay(0.3,function()
+            TweenService:Create(db,TweenInfo.new(0.1),{BackgroundColor3=Color3.fromRGB(160,115,25)}):Play()
+        end)
+    end)
+end
+upd(pTP)
+addSep(pTP)
+
+addButton(pTP,"🌀 AMBOS ON — Mira + NPC","",function()
+    tpMiraOn = true; tpNPCOn = true
+    notif("🌀 TP MIRA TOTAL ON", 2)
+end)
+addButton(pTP,"⏹ DESLIGAR TUDO TP","",function()
+    tpMiraOn = false; tpNPCOn = false
+    notif("TP Mira OFF", 1.5)
+end)
+upd(pTP)
+
+-- ============================================================
+-- TAB 4 — PLAYERS
+-- ============================================================
+local pSec = pages[4]
+local function clrP()
+    for _, v in pairs(pSec:GetChildren()) do
+        if type(v.Name)=="string" and v.Name:sub(1,3)=="PB_" then v:Destroy() end
+    end
+end
+local function refreshMap()
+    clrP(); local n = 0
+    for _, p in pairs(Players:GetPlayers()) do
+        if p ~= lp then
+            n = n + 1; local ref = p
+            local h = p.Character and p.Character:FindFirstChildOfClass("Humanoid")
+            local hp = h and math.floor(h.Health) or "?"
+            local b = addButton(pSec, ref.Name, "HP: "..tostring(hp), function()
+                if ref.Character then kill(ref.Character); notif("Matou "..ref.Name, 1.5) end
+            end)
+            b.Name = "PB_"..p.Name
+        end
+    end
+    upd(pSec); return n
+end
+addButton(pSec,"Atualizar lista","",function() notif(refreshMap().." players", 2) end)
+addButton(pSec,"MATAR TODOS","",function() atkAll() end)
+addSep(pSec); upd(pSec)
+Players.PlayerAdded:Connect(function() task.wait(1); refreshMap() end)
+Players.PlayerRemoving:Connect(function() task.wait(0.5); refreshMap() end)
+task.delay(1, refreshMap)
+
+-- ============================================================
+-- TAB 5 — GOD
+-- ============================================================
+addSep(pages[5])
+addToggle(pages[5],"God Mode",function(v)
+    godOn = v
+    if v then startGod(); notif("God Mode ON", 4)
+    else stopGod(); notif("God Mode OFF", 2) end
+end)
+addButton(pages[5],"Reiniciar God Mode","",function()
+    if not godOn then notif("Ative primeiro", 2); return end
+    if godConn then godConn:Disconnect() end; startGod(); notif("Reiniciado", 2)
+end)
+addButton(pages[5],"Matar NPCs agora","",function() atkNPCs() end)
+upd(pages[5])
+
+-- ============================================================
+-- TAB 6 — ROUBO
+-- ============================================================
+addSep(pages[6])
+addToggle(pages[6],"Roubo Global  (toque direito)",function(v)
+    stealOn = v; notif(v and "Roubo ON" or "OFF", 2)
+end)
+addSep(pages[6])
+addButton(pages[6],"ROUBAR TODOS AGORA","",function() stealAll() end)
+addButton(pages[6],"AUTO ROUBO  (loop)","",function()
+    if stealOn then stealOn = false; notif("Auto Roubo OFF", 2)
+    else stealOn = true; notif("Auto Roubo ON", 2)
+        task.spawn(function() while stealOn do stealAll(); task.wait(1) end end)
+    end
+end)
+upd(pages[6])
+
+-- ============================================================
+-- TAB 7 — VOID
+-- ============================================================
+addSep(pages[7])
+addToggle(pages[7],"☠️ VOID ZONE",function(v)
+    voidOn = v
+    if v then criarVoid() else limparVoid(); notif("Void OFF", 2) end
+end)
+addButton(pages[7],"Reposicionar Void","",function()
+    if not voidOn then notif("Ative primeiro", 2); return end
+    limparVoid(); voidOn = true; criarVoid()
+end)
+addButton(pages[7],"KILL ZONE AGORA","",function()
+    local char = lp.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+    local n = 0
+    for _, p in pairs(Players:GetPlayers()) do
+        if p ~= lp and p.Character then
+            local pr = p.Character:FindFirstChild("HumanoidRootPart")
+            if pr and (pr.Position-root.Position).Magnitude > SAFE_RADIUS then
+                n = n + 1; task.spawn(function() kill(p.Character) end)
+            end
+        end
+    end
+    notif("☠️ "..n.." eliminados", 2)
+end)
+upd(pages[7])
+
+-- ============================================================
+-- TAB 8 — INVIS
+-- ============================================================
+addSep(pages[8])
+addButton(pages[8],"👻 ATIVAR INVISÍVEL","God Mode junto",function()
+    notif("Carregando...", 1)
+    task.spawn(function()
+        if not godOn then godOn = true; startGod() end
+        local char = lp.Character
+        if char then
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if hum then pcall(function()
+                hum.BreakJointsOnDeath = false
+                hum.MaxHealth = GOD_HP; hum.Health = GOD_HP
+            end) end
+        end
+        pcall(function()
+            loadstring(game:HttpGet('https://pastebin.com/raw/3Rnd9rHf'))()
+        end)
+        task.wait(0.3)
+        pcall(function()
+            local c = lp.Character
+            if c then
+                workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
+                lp.CameraMode = Enum.CameraMode.Classic
+                local hum = c:FindFirstChildOfClass("Humanoid")
+                if hum then
+                    workspace.CurrentCamera.CameraSubject = hum
+                    hum:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
+                    hum.BreakJointsOnDeath = false
+                    hum.Health = GOD_HP
+                end
+            end
+        end)
+        notif("👻 Invisível + God ON", 3)
+    end)
+end)
+lp.CharacterAdded:Connect(function(char)
+    task.wait(0.5)
+    pcall(function()
+        workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
+        lp.CameraMode = Enum.CameraMode.Classic
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if hum then workspace.CurrentCamera.CameraSubject = hum end
+    end)
+end)
+addButton(pages[8],"Recarregar","",function()
+    task.spawn(function()
+        if not godOn then godOn = true; startGod() end
+        pcall(function()
+            loadstring(game:HttpGet('https://pastebin.com/raw/3Rnd9rHf'))()
+        end)
+        task.wait(0.3)
+        pcall(function()
+            workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
+            lp.CameraMode = Enum.CameraMode.Classic
+            local c = lp.Character
+            if c then
+                local hum = c:FindFirstChildOfClass("Humanoid")
+                if hum then workspace.CurrentCamera.CameraSubject = hum end
+            end
+        end)
+        notif("Recarregado", 2)
+    end)
+end)
+addButton(pages[8],"🔧 FIX TELA PRETA","",function()
+    pcall(function()
+        workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
+        lp.CameraMode = Enum.CameraMode.Classic
+        local c = lp.Character
+        if c then
+            local hum = c:FindFirstChildOfClass("Humanoid")
+            if hum then
+                workspace.CurrentCamera.CameraSubject = hum
+                hum:ChangeState(Enum.HumanoidStateType.Running)
+            end
+        end
+    end)
+    notif("✅ Câmera restaurada!", 2)
+end)
+upd(pages[8])
+
+-- ============================================================
+-- FLOAT BUTTON
+-- ============================================================
+local fsg = Instance.new("ScreenGui", container)
+fsg.Name = "CM_V171_Float_Core"
+fsg.ResetOnSpawn = false
+fsg.IgnoreGuiInset = true
+fsg.DisplayOrder = 10000
+
+local fb = Instance.new("TextButton", fsg)
+fb.Size = UDim2.new(0,52,0,52); fb.Position = UDim2.new(0,10,0.5,0)
+fb.BackgroundColor3 = RED; fb.Text = "[C]"; fb.TextColor3 = Color3.new(1,1,1)
+fb.Font = Enum.Font.GothamBold; fb.TextSize = 14; fb.BorderSizePixel = 0
+Instance.new("UICorner",fb).CornerRadius = UDim.new(1,0)
+Instance.new("UIStroke",fb).Color = Color3.fromRGB(255,80,80)
+
+local fd, fs, fp, fdist = false, nil, nil, 0
+fb.InputBegan:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
+        fd = true; fdist = 0; fs = i.Position; fp = fb.Position
+    end
+end)
+UserInputService.InputChanged:Connect(function(i)
+    if not fd then return end
+    if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseMove then
+        local d = i.Position - fs; fdist = d.Magnitude
+        fb.Position = UDim2.new(fp.X.Scale, fp.X.Offset+d.X, fp.Y.Scale, fp.Y.Offset+d.Y)
+    end
+end)
+UserInputService.InputEnded:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then fd = false end
+end)
+fb.Activated:Connect(function()
+    if fdist > 8 then return end
+    win.Visible = not win.Visible; mini = false
+    if win.Visible then
+        win.Size = UDim2.new(0,W,0,H)
+        fb.BackgroundColor3 = RED
+    else
+        fb.BackgroundColor3 = Color3.fromRGB(40,40,40)
+    end
+end)
+
+notif("V17.1 pronto! 🌀 TP Mira corrigido — NPC detecta em qualquer pasta!", 4)
